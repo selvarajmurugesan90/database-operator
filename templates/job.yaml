@@ -1,0 +1,105 @@
+{{- if .Values.jobs }}
+{{- range $name, $job := .Values.jobs }}
+{{- if $job.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  {{- if $job.generateName }}
+  name: {{ include "database-operator.fullname" $ }}-{{ $name }}-{{ $job.image.tag | default "1.0.0" | replace "." "-" | trunc 63 | trimSuffix "-" }}
+  {{- else }}
+  name: {{ include "database-operator.fullname" $ }}-{{ $name }}
+  {{- end }}
+  labels:
+    {{- include "database-operator.labels" $ | nindent 4 }}
+    {{- if $job.generateName }}
+    app.kubernetes.io/version: {{ $job.image.tag | default "1.0.0" | quote }}
+    {{- end }}
+  {{- with $job.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  template:
+    metadata:
+      {{- with $job.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "database-operator.selectorLabels" $ | nindent 8 }}
+        {{- if $job.generateName }}
+        app.kubernetes.io/version: {{ $job.image.tag | default "1.0.0" | quote }}
+        {{- end }}
+    spec:
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $job.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml $job.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      {{- if or (and (hasKey $.Values "serviceAccount") $.Values.serviceAccount.create (not (and (hasKey $job "serviceAccount") (hasKey $job.serviceAccount "enabled") (eq $job.serviceAccount.enabled false)))) (and (hasKey $job "serviceAccount") (hasKey $job.serviceAccount "enabled") (eq $job.serviceAccount.enabled true)) }}
+      serviceAccountName: {{ include "database-operator.serviceAccountName" $ }}
+      {{- end }}
+      {{- if and $job.securityContext (not (eq $job.securityContext.enabled false)) }}
+      securityContext:
+        {{- omit $job.securityContext "enabled" | toYaml | nindent 8 }}
+      {{- end }}
+      restartPolicy: {{ $job.restartPolicy | default "OnFailure" }}
+      containers:
+        - name: {{ $name }}
+          {{- if and $job.containerSecurityContext (not (eq $job.containerSecurityContext.enabled false)) }}
+          securityContext:
+            {{- omit $job.containerSecurityContext "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          image: "{{ $job.image.repository }}:{{ $job.image.tag | default "1.0.0" }}"
+          imagePullPolicy: {{ $job.image.pullPolicy | default "IfNotPresent" }}
+          {{- if $job.command }}
+          command:
+            {{- toYaml $job.command | nindent 12 }}
+          {{- end }}
+          {{- if $job.args }}
+          args:
+            {{- toYaml $job.args | nindent 12 }}
+          {{- end }}
+          {{- with $job.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $job.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $job.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $job.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $job.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $job.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $job.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $job.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  backoffLimit: {{ $job.backoffLimit | default 3 }}
+  {{- if $job.ttlSecondsAfterFinished }}
+  ttlSecondsAfterFinished: {{ $job.ttlSecondsAfterFinished }}
+  {{- end }}
+---
+{{- end }}
+{{- end }}
+{{- end }}

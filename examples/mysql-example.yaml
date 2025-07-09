@@ -1,0 +1,219 @@
+# MySQL Database Operator Example Configuration
+# This example shows how to configure the database operator for MySQL
+
+nameOverride: "mysql-ops"
+fullnameOverride: "mysql-database-operator"
+
+# MySQL database configuration
+databases:
+  mysql:
+    enabled: true
+    type: mysql
+    host: mysql-primary
+    port: 3306
+    database: myapp
+    ssl: false
+    schemaTool: liquibase
+
+# Enable schema management
+schemaJobs:
+  enabled: true
+  mysql:
+    enabled: true
+    image:
+      repository: liquibase/liquibase
+      tag: "4.25"
+      pullPolicy: IfNotPresent
+    changelogFile: "db/changelog/db.changelog-master.xml"
+    command: ["liquibase"]
+    args:
+      - "update"
+      - "--url=jdbc:mysql://$(DB_HOST):$(DB_PORT)/$(DB_NAME)?useSSL=false&allowPublicKeyRetrieval=true"
+      - "--username=$(DB_USER)"
+      - "--password=$(DB_PASSWORD)"
+      - "--changelog-file=$(CHANGELOG_FILE)"
+    env:
+      - name: DB_HOST
+        value: "mysql-primary"
+      - name: DB_PORT
+        value: "3306"
+      - name: DB_NAME
+        value: "myapp"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: MYSQL_USERNAME
+      - name: DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: MYSQL_PASSWORD
+      - name: CHANGELOG_FILE
+        value: "db/changelog/db.changelog-master.xml"
+
+# Enable backup jobs
+backupJobs:
+  enabled: true
+  mysql:
+    enabled: true
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    image:
+      repository: mysql
+      tag: "8.0"
+      pullPolicy: IfNotPresent
+    command: ["/bin/bash"]
+    args:
+      - -c
+      - |
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        mysqldump -h $DB_HOST -u $DB_USER -p$DB_PASSWORD --single-transaction --routines --triggers $DB_NAME > /backup/mysql_${DB_NAME}_${TIMESTAMP}.sql
+        find /backup -name "mysql_${DB_NAME}_*.sql" -type f -mtime +7 -delete
+    env:
+      - name: DB_HOST
+        value: "mysql-primary"
+      - name: DB_NAME
+        value: "myapp"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: MYSQL_USERNAME
+      - name: DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: MYSQL_PASSWORD
+    volumeMounts:
+      - name: backup-storage
+        mountPath: /backup
+    volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: backup-storage
+
+# Enable maintenance jobs
+maintenanceJobs:
+  enabled: true
+  mysql:
+    optimize:
+      enabled: true
+      schedule: "0 3 * * 0"  # Weekly on Sunday at 3 AM
+      image:
+        repository: mysql
+        tag: "8.0"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          # Get all tables and optimize them
+          mysql -h $DB_HOST -u $DB_USER -p$DB_PASSWORD -e "
+            SELECT CONCAT('OPTIMIZE TABLE ', table_name, ';') 
+            FROM information_schema.tables 
+            WHERE table_schema = '$DB_NAME'
+          " -s -r | mysql -h $DB_HOST -u $DB_USER -p$DB_PASSWORD $DB_NAME
+      env:
+        - name: DB_HOST
+          value: "mysql-primary"
+        - name: DB_NAME
+          value: "myapp"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: MYSQL_USERNAME
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: MYSQL_PASSWORD
+
+# Enable backup storage
+persistentVolumeClaims:
+  backup-storage:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: standard
+    storage: 100Gi
+    annotations:
+      backup.policy: "daily"
+
+# Database credentials
+secrets:
+  database-credentials:
+    create: true
+    type: Opaque
+    data:
+      MYSQL_USERNAME: "YWRtaW4="  # admin (base64 encoded)
+      MYSQL_PASSWORD: "cGFzc3dvcmQ="  # password (base64 encoded)
+
+# Custom operations example
+customOperations:
+  enabled: true
+  cronJobs:
+    mysql-health-check:
+      enabled: true
+      schedule: "*/15 * * * *"  # Every 15 minutes
+      image:
+        repository: mysql
+        tag: "8.0"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          mysql -h $DB_HOST -u $DB_USER -p$DB_PASSWORD -e "SELECT 1" > /dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            echo "MySQL health check passed"
+          else
+            echo "MySQL health check failed"
+            exit 1
+          fi
+      env:
+        - name: DB_HOST
+          value: "mysql-primary"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: MYSQL_USERNAME
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: MYSQL_PASSWORD
+      resources:
+        limits:
+          cpu: 100m
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+
+# Enable service account and RBAC
+serviceAccount:
+  create: true
+  annotations:
+    app.kubernetes.io/managed-by: database-operator
+
+rbac:
+  create: true
+
+# Security context
+podSecurityContext:
+  enabled: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  enabled: true
+  capabilities:
+    drop:
+      - ALL
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000

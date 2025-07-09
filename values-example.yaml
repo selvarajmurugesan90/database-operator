@@ -1,0 +1,67 @@
+# Example values file for Database Operator
+# Copy this file and modify it according to your needs
+
+nameOverride: ""
+fullnameOverride: "database-operator"
+
+# Enable PostgreSQL operations
+schemaJobs:
+  enabled: true
+  postgresql:
+    enabled: true
+    image:
+      repository: liquibase/liquibase
+      tag: "4.25"
+    changelogFile: "db/changelog/db.changelog-master.xml"
+
+# Enable backup jobs
+backupJobs:
+  enabled: true
+  postgresql:
+    enabled: true
+    schedule: "0 2 * * *"  # Daily at 2 AM
+
+# Enable maintenance jobs
+maintenanceJobs:
+  enabled: true
+  postgresql:
+    vacuum:
+      enabled: true
+      schedule: "0 3 * * 0"  # Weekly on Sunday
+
+# Storage for backups
+persistentVolumeClaims:
+  backup-storage:
+    enabled: true
+    storage: 100Gi
+    storageClassName: standard
+
+# Database credentials (base64 encoded)
+secrets:
+  database-credentials:
+    create: true
+    data:
+      POSTGRES_USERNAME: "YWRtaW4="  # admin
+      POSTGRES_PASSWORD: "cGFzc3dvcmQ="  # password
+
+# Security settings
+serviceAccount:
+  create: true
+
+rbac:
+  create: true
+
+podSecurityContext:
+  enabled: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  enabled: true
+  capabilities:
+    drop:
+      - ALL
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  runAsUser: 1000

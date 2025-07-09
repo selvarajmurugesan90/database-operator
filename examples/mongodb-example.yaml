@@ -1,0 +1,273 @@
+# MongoDB Database Operator Example Configuration
+# This example shows how to configure the database operator for MongoDB
+
+nameOverride: "mongodb-ops"
+fullnameOverride: "mongodb-database-operator"
+
+# MongoDB database configuration
+databases:
+  mongodb:
+    enabled: true
+    type: mongodb
+    host: mongodb-primary
+    port: 27017
+    database: myapp
+    ssl: false
+    schemaTool: custom
+
+# Enable backup jobs
+backupJobs:
+  enabled: true
+  mongodb:
+    enabled: true
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    image:
+      repository: mongo
+      tag: "6.0"
+      pullPolicy: IfNotPresent
+    command: ["/bin/bash"]
+    args:
+      - -c
+      - |
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        mongodump --host $DB_HOST:$DB_PORT --db $DB_NAME --username $DB_USER --password $DB_PASSWORD --out /backup/mongodb_${DB_NAME}_${TIMESTAMP}
+        tar -czf /backup/mongodb_${DB_NAME}_${TIMESTAMP}.tar.gz -C /backup mongodb_${DB_NAME}_${TIMESTAMP}
+        rm -rf /backup/mongodb_${DB_NAME}_${TIMESTAMP}
+        find /backup -name "mongodb_${DB_NAME}_*.tar.gz" -type f -mtime +7 -delete
+    env:
+      - name: DB_HOST
+        value: "mongodb-primary"
+      - name: DB_PORT
+        value: "27017"
+      - name: DB_NAME
+        value: "myapp"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: MONGODB_USERNAME
+      - name: DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: MONGODB_PASSWORD
+    volumeMounts:
+      - name: backup-storage
+        mountPath: /backup
+    volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: backup-storage
+
+# Enable maintenance jobs
+maintenanceJobs:
+  enabled: true
+  mongodb:
+    indexOptimization:
+      enabled: true
+      schedule: "0 3 * * 0"  # Weekly on Sunday at 3 AM
+      image:
+        repository: mongo
+        tag: "6.0"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          mongo --host $DB_HOST:$DB_PORT --username $DB_USER --password $DB_PASSWORD --authenticationDatabase admin $DB_NAME --eval "
+            db.runCommand({compact: 'collection_name'});
+            db.runCommand({reIndex: 'collection_name'});
+          "
+      env:
+        - name: DB_HOST
+          value: "mongodb-primary"
+        - name: DB_PORT
+          value: "27017"
+        - name: DB_NAME
+          value: "myapp"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: MONGODB_USERNAME
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: MONGODB_PASSWORD
+
+# Enable backup storage
+persistentVolumeClaims:
+  backup-storage:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: standard
+    storage: 100Gi
+    annotations:
+      backup.policy: "daily"
+
+# Database credentials
+secrets:
+  database-credentials:
+    create: true
+    type: Opaque
+    data:
+      MONGODB_USERNAME: "YWRtaW4="  # admin (base64 encoded)
+      MONGODB_PASSWORD: "cGFzc3dvcmQ="  # password (base64 encoded)
+
+# Custom operations for MongoDB
+customOperations:
+  enabled: true
+  
+  # One-time data migration job
+  jobs:
+    data-migration:
+      enabled: true
+      image:
+        repository: mongo
+        tag: "6.0"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          # Example data migration script
+          mongo --host $DB_HOST:$DB_PORT --username $DB_USER --password $DB_PASSWORD --authenticationDatabase admin $DB_NAME --eval "
+            // Migration script example
+            db.users.updateMany({}, { \$set: { migrated: true } });
+            print('Data migration completed');
+          "
+      env:
+        - name: DB_HOST
+          value: "mongodb-primary"
+        - name: DB_PORT
+          value: "27017"
+        - name: DB_NAME
+          value: "myapp"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: MONGODB_USERNAME
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: MONGODB_PASSWORD
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+
+  # Scheduled operations
+  cronJobs:
+    mongodb-health-check:
+      enabled: true
+      schedule: "*/15 * * * *"  # Every 15 minutes
+      image:
+        repository: mongo
+        tag: "6.0"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          mongo --host $DB_HOST:$DB_PORT --username $DB_USER --password $DB_PASSWORD --authenticationDatabase admin --eval "db.runCommand('ping')" > /dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            echo "MongoDB health check passed"
+          else
+            echo "MongoDB health check failed"
+            exit 1
+          fi
+      env:
+        - name: DB_HOST
+          value: "mongodb-primary"
+        - name: DB_PORT
+          value: "27017"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: MONGODB_USERNAME
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: MONGODB_PASSWORD
+      resources:
+        limits:
+          cpu: 100m
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+
+    collection-stats:
+      enabled: true
+      schedule: "0 6 * * *"  # Daily at 6 AM
+      image:
+        repository: mongo
+        tag: "6.0"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          mongo --host $DB_HOST:$DB_PORT --username $DB_USER --password $DB_PASSWORD --authenticationDatabase admin $DB_NAME --eval "
+            db.runCommand({dbStats: 1});
+            db.runCommand({collStats: 'users'});
+          "
+      env:
+        - name: DB_HOST
+          value: "mongodb-primary"
+        - name: DB_PORT
+          value: "27017"
+        - name: DB_NAME
+          value: "myapp"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: MONGODB_USERNAME
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: MONGODB_PASSWORD
+      resources:
+        limits:
+          cpu: 200m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+
+# Enable service account and RBAC
+serviceAccount:
+  create: true
+  annotations:
+    app.kubernetes.io/managed-by: database-operator
+
+rbac:
+  create: true
+
+# Security context
+podSecurityContext:
+  enabled: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  enabled: true
+  capabilities:
+    drop:
+      - ALL
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000

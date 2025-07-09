@@ -1,0 +1,436 @@
+# TimescaleDB Database Operator Example Configuration
+# This example shows how to configure the database operator for TimescaleDB
+
+nameOverride: "timescaledb-ops"
+fullnameOverride: "timescaledb-database-operator"
+
+# TimescaleDB database configuration
+databases:
+  timescaledb:
+    enabled: true
+    type: timescaledb
+    host: timescaledb-primary
+    port: 5432
+    database: tsdb
+    ssl: false
+    schemaTool: liquibase
+
+# Enable schema management
+schemaJobs:
+  enabled: true
+  postgresql:  # TimescaleDB uses PostgreSQL schema jobs
+    enabled: true
+    image:
+      repository: liquibase/liquibase
+      tag: "4.25"
+      pullPolicy: IfNotPresent
+    changelogFile: "db/changelog/timescaledb.changelog-master.xml"
+    command: ["liquibase"]
+    args:
+      - "update"
+      - "--url=jdbc:postgresql://$(DB_HOST):$(DB_PORT)/$(DB_NAME)"
+      - "--username=$(DB_USER)"
+      - "--password=$(DB_PASSWORD)"
+      - "--changelog-file=$(CHANGELOG_FILE)"
+    env:
+      - name: DB_HOST
+        value: "timescaledb-primary"
+      - name: DB_PORT
+        value: "5432"
+      - name: DB_NAME
+        value: "tsdb"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: TIMESCALE_USERNAME
+      - name: DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: TIMESCALE_PASSWORD
+      - name: CHANGELOG_FILE
+        value: "db/changelog/timescaledb.changelog-master.xml"
+
+# Enable backup jobs
+backupJobs:
+  enabled: true
+  postgresql:  # TimescaleDB uses PostgreSQL backup
+    enabled: true
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    image:
+      repository: postgres
+      tag: "15-alpine"
+      pullPolicy: IfNotPresent
+    command: ["/bin/bash"]
+    args:
+      - -c
+      - |
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        pg_dump -h $DB_HOST -U $DB_USER -d $DB_NAME -F c -f /backup/timescaledb_${DB_NAME}_${TIMESTAMP}.dump
+        find /backup -name "timescaledb_${DB_NAME}_*.dump" -type f -mtime +7 -delete
+    env:
+      - name: DB_HOST
+        value: "timescaledb-primary"
+      - name: DB_NAME
+        value: "tsdb"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: TIMESCALE_USERNAME
+      - name: PGPASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: TIMESCALE_PASSWORD
+    volumeMounts:
+      - name: backup-storage
+        mountPath: /backup
+    volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: backup-storage
+
+# Enable maintenance jobs
+maintenanceJobs:
+  enabled: true
+  postgresql:  # TimescaleDB uses PostgreSQL maintenance
+    vacuum:
+      enabled: true
+      schedule: "0 3 * * 0"  # Weekly on Sunday at 3 AM
+      image:
+        repository: postgres
+        tag: "15-alpine"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          psql -h $DB_HOST -U $DB_USER -d $DB_NAME -c "VACUUM ANALYZE;"
+      env:
+        - name: DB_HOST
+          value: "timescaledb-primary"
+        - name: DB_NAME
+          value: "tsdb"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_USERNAME
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_PASSWORD
+
+# Enable backup storage
+persistentVolumeClaims:
+  backup-storage:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: standard
+    storage: 200Gi  # TimescaleDB may need more storage for time-series data
+    annotations:
+      backup.policy: "daily"
+
+# Database credentials
+secrets:
+  database-credentials:
+    create: true
+    type: Opaque
+    data:
+      TIMESCALE_USERNAME: "YWRtaW4="  # admin (base64 encoded)
+      TIMESCALE_PASSWORD: "cGFzc3dvcmQ="  # password (base64 encoded)
+
+# Custom operations for TimescaleDB
+customOperations:
+  enabled: true
+  
+  # One-time TimescaleDB setup job
+  jobs:
+    timescaledb-setup:
+      enabled: true
+      image:
+        repository: postgres
+        tag: "15-alpine"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          psql -h $DB_HOST -U $DB_USER -d $DB_NAME -c "
+            CREATE EXTENSION IF NOT EXISTS timescaledb;
+            
+            -- Create a sample hypertable
+            CREATE TABLE IF NOT EXISTS metrics (
+              time TIMESTAMPTZ NOT NULL,
+              device_id TEXT NOT NULL,
+              cpu_usage DOUBLE PRECISION,
+              memory_usage DOUBLE PRECISION,
+              disk_usage DOUBLE PRECISION
+            );
+            
+            -- Convert to hypertable
+            SELECT create_hypertable('metrics', 'time', if_not_exists => TRUE);
+            
+            -- Create indexes
+            CREATE INDEX IF NOT EXISTS idx_metrics_device_id ON metrics (device_id, time DESC);
+            
+            -- Set up compression policy
+            ALTER TABLE metrics SET (
+              timescaledb.compress,
+              timescaledb.compress_segmentby = 'device_id'
+            );
+            
+            SELECT add_compression_policy('metrics', INTERVAL '7 days');
+            
+            -- Set up retention policy
+            SELECT add_retention_policy('metrics', INTERVAL '30 days');
+          "
+      env:
+        - name: DB_HOST
+          value: "timescaledb-primary"
+        - name: DB_NAME
+          value: "tsdb"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_USERNAME
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_PASSWORD
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+
+  # Scheduled operations
+  cronJobs:
+    timescaledb-health-check:
+      enabled: true
+      schedule: "*/15 * * * *"  # Every 15 minutes
+      image:
+        repository: postgres
+        tag: "15-alpine"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          psql -h $DB_HOST -U $DB_USER -d $DB_NAME -c "SELECT 1;" > /dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            echo "TimescaleDB health check passed"
+          else
+            echo "TimescaleDB health check failed"
+            exit 1
+          fi
+      env:
+        - name: DB_HOST
+          value: "timescaledb-primary"
+        - name: DB_NAME
+          value: "tsdb"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_USERNAME
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_PASSWORD
+      resources:
+        limits:
+          cpu: 100m
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+
+    compression-job:
+      enabled: true
+      schedule: "0 1 * * *"  # Daily at 1 AM
+      image:
+        repository: postgres
+        tag: "15-alpine"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          psql -h $DB_HOST -U $DB_USER -d $DB_NAME -c "
+            -- Manually compress chunks older than 1 day
+            SELECT compress_chunk(i) FROM show_chunks('metrics', older_than => INTERVAL '1 day') i;
+            
+            -- Show compression stats
+            SELECT 
+              chunk_name,
+              before_compression_total_bytes,
+              after_compression_total_bytes,
+              compression_ratio
+            FROM chunk_compression_stats('metrics');
+          "
+      env:
+        - name: DB_HOST
+          value: "timescaledb-primary"
+        - name: DB_NAME
+          value: "tsdb"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_USERNAME
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_PASSWORD
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 200m
+          memory: 256Mi
+
+    statistics-job:
+      enabled: true
+      schedule: "0 6 * * *"  # Daily at 6 AM
+      image:
+        repository: postgres
+        tag: "15-alpine"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          psql -h $DB_HOST -U $DB_USER -d $DB_NAME -c "
+            -- Show hypertable stats
+            SELECT 
+              hypertable_name,
+              num_chunks,
+              table_size,
+              index_size,
+              total_size
+            FROM hypertable_detailed_size('metrics');
+            
+            -- Show chunk stats
+            SELECT 
+              chunk_name,
+              range_start,
+              range_end,
+              chunk_size
+            FROM chunk_detailed_size('metrics')
+            ORDER BY range_start DESC
+            LIMIT 10;
+            
+            -- Show compression stats
+            SELECT 
+              total_chunks,
+              number_compressed_chunks,
+              uncompressed_heap_size,
+              compressed_heap_size,
+              compressed_index_size,
+              compressed_toast_size
+            FROM hypertable_compression_stats('metrics');
+          "
+      env:
+        - name: DB_HOST
+          value: "timescaledb-primary"
+        - name: DB_NAME
+          value: "tsdb"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_USERNAME
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_PASSWORD
+      resources:
+        limits:
+          cpu: 200m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+
+    data-retention-cleanup:
+      enabled: true
+      schedule: "0 4 * * *"  # Daily at 4 AM
+      image:
+        repository: postgres
+        tag: "15-alpine"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          psql -h $DB_HOST -U $DB_USER -d $DB_NAME -c "
+            -- Manual cleanup of old data (if automatic retention policy is not sufficient)
+            DELETE FROM metrics WHERE time < NOW() - INTERVAL '90 days';
+            
+            -- Update table statistics
+            ANALYZE metrics;
+            
+            -- Show retention policy status
+            SELECT * FROM timescaledb_information.data_nodes;
+          "
+      env:
+        - name: DB_HOST
+          value: "timescaledb-primary"
+        - name: DB_NAME
+          value: "tsdb"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_USERNAME
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_PASSWORD
+      resources:
+        limits:
+          cpu: 1000m
+          memory: 1Gi
+        requests:
+          cpu: 500m
+          memory: 512Mi
+
+# Enable service account and RBAC
+serviceAccount:
+  create: true
+  annotations:
+    app.kubernetes.io/managed-by: database-operator
+
+rbac:
+  create: true
+
+# Security context
+podSecurityContext:
+  enabled: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  enabled: true
+  capabilities:
+    drop:
+      - ALL
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000

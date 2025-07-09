@@ -1,0 +1,28 @@
+{{- if .Values.persistentVolumeClaims -}}
+{{- range $name, $pvc := .Values.persistentVolumeClaims }}
+{{- if $pvc.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "database-operator.labels" $ | nindent 4 }}
+  {{- with $pvc.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $pvc.accessModes }}
+  accessModes:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- if $pvc.storageClassName }}
+  storageClassName: {{ $pvc.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $pvc.storage }}
+{{- end }}
+{{- end }}
+{{- end }}

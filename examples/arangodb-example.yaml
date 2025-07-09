@@ -1,0 +1,347 @@
+# ArangoDB Database Operator Example Configuration
+# This example shows how to configure the database operator for ArangoDB
+
+nameOverride: "arangodb-ops"
+fullnameOverride: "arangodb-database-operator"
+
+# ArangoDB database configuration
+databases:
+  arangodb:
+    enabled: true
+    type: arangodb
+    host: arangodb-single
+    port: 8529
+    database: myapp
+    ssl: false
+    schemaTool: custom
+
+# Enable backup jobs
+backupJobs:
+  enabled: true
+  arangodb:
+    enabled: true
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    image:
+      repository: arangodb
+      tag: "3.11"
+      pullPolicy: IfNotPresent
+    command: ["/bin/bash"]
+    args:
+      - -c
+      - |
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        arangodump --server.endpoint http://$DB_HOST:$DB_PORT --server.username $DB_USER --server.password $DB_PASSWORD --server.database $DB_NAME --output-directory /backup/arangodb_${DB_NAME}_${TIMESTAMP}
+        tar -czf /backup/arangodb_${DB_NAME}_${TIMESTAMP}.tar.gz -C /backup arangodb_${DB_NAME}_${TIMESTAMP}
+        rm -rf /backup/arangodb_${DB_NAME}_${TIMESTAMP}
+        find /backup -name "arangodb_${DB_NAME}_*.tar.gz" -type f -mtime +7 -delete
+    env:
+      - name: DB_HOST
+        value: "arangodb-single"
+      - name: DB_PORT
+        value: "8529"
+      - name: DB_NAME
+        value: "myapp"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: ARANGO_USERNAME
+      - name: DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: ARANGO_PASSWORD
+    volumeMounts:
+      - name: backup-storage
+        mountPath: /backup
+    volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: backup-storage
+
+# Enable maintenance jobs
+maintenanceJobs:
+  enabled: true
+  arangodb:
+    compaction:
+      enabled: true
+      schedule: "0 3 * * 0"  # Weekly on Sunday at 3 AM
+      image:
+        repository: arangodb
+        tag: "3.11"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          arangosh --server.endpoint http://$DB_HOST:$DB_PORT --server.username $DB_USER --server.password $DB_PASSWORD --server.database $DB_NAME --javascript.execute-string "
+            db._collections().forEach(function(collection) {
+              if (collection.name()[0] !== '_') {
+                collection.compact();
+                print('Compacted collection: ' + collection.name());
+              }
+            });
+          "
+      env:
+        - name: DB_HOST
+          value: "arangodb-single"
+        - name: DB_PORT
+          value: "8529"
+        - name: DB_NAME
+          value: "myapp"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: ARANGO_USERNAME
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: ARANGO_PASSWORD
+
+# Enable backup storage
+persistentVolumeClaims:
+  backup-storage:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: standard
+    storage: 100Gi
+    annotations:
+      backup.policy: "daily"
+
+# Database credentials
+secrets:
+  database-credentials:
+    create: true
+    type: Opaque
+    data:
+      ARANGO_USERNAME: "YWRtaW4="  # admin (base64 encoded)
+      ARANGO_PASSWORD: "cGFzc3dvcmQ="  # password (base64 encoded)
+
+# Custom operations for ArangoDB
+customOperations:
+  enabled: true
+  
+  # One-time schema setup job
+  jobs:
+    schema-setup:
+      enabled: true
+      image:
+        repository: arangodb
+        tag: "3.11"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          arangosh --server.endpoint http://$DB_HOST:$DB_PORT --server.username $DB_USER --server.password $DB_PASSWORD --server.database $DB_NAME --javascript.execute-string "
+            // Create collections
+            try {
+              db._createDocumentCollection('users');
+              db._createDocumentCollection('products');
+              db._createEdgeCollection('purchases');
+              print('Collections created successfully');
+            } catch (e) {
+              print('Error creating collections: ' + e.message);
+            }
+            
+            // Create indexes
+            try {
+              db.users.ensureIndex({ type: 'persistent', fields: ['email'] });
+              db.products.ensureIndex({ type: 'persistent', fields: ['category'] });
+              print('Indexes created successfully');
+            } catch (e) {
+              print('Error creating indexes: ' + e.message);
+            }
+          "
+      env:
+        - name: DB_HOST
+          value: "arangodb-single"
+        - name: DB_PORT
+          value: "8529"
+        - name: DB_NAME
+          value: "myapp"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: ARANGO_USERNAME
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: ARANGO_PASSWORD
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+
+  # Scheduled operations
+  cronJobs:
+    arangodb-health-check:
+      enabled: true
+      schedule: "*/15 * * * *"  # Every 15 minutes
+      image:
+        repository: arangodb
+        tag: "3.11"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          arangosh --server.endpoint http://$DB_HOST:$DB_PORT --server.username $DB_USER --server.password $DB_PASSWORD --server.database $DB_NAME --javascript.execute-string "
+            db._version();
+            print('ArangoDB health check passed');
+          " > /dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            echo "ArangoDB health check passed"
+          else
+            echo "ArangoDB health check failed"
+            exit 1
+          fi
+      env:
+        - name: DB_HOST
+          value: "arangodb-single"
+        - name: DB_PORT
+          value: "8529"
+        - name: DB_NAME
+          value: "myapp"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: ARANGO_USERNAME
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: ARANGO_PASSWORD
+      resources:
+        limits:
+          cpu: 100m
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+
+    collection-stats:
+      enabled: true
+      schedule: "0 6 * * *"  # Daily at 6 AM
+      image:
+        repository: arangodb
+        tag: "3.11"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          arangosh --server.endpoint http://$DB_HOST:$DB_PORT --server.username $DB_USER --server.password $DB_PASSWORD --server.database $DB_NAME --javascript.execute-string "
+            db._collections().forEach(function(collection) {
+              if (collection.name()[0] !== '_') {
+                var stats = collection.figures();
+                print('Collection: ' + collection.name() + ', Documents: ' + stats.count + ', Size: ' + stats.documentsSize);
+              }
+            });
+          "
+      env:
+        - name: DB_HOST
+          value: "arangodb-single"
+        - name: DB_PORT
+          value: "8529"
+        - name: DB_NAME
+          value: "myapp"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: ARANGO_USERNAME
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: ARANGO_PASSWORD
+      resources:
+        limits:
+          cpu: 200m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+
+    data-cleanup:
+      enabled: true
+      schedule: "0 1 * * *"  # Daily at 1 AM
+      image:
+        repository: arangodb
+        tag: "3.11"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          arangosh --server.endpoint http://$DB_HOST:$DB_PORT --server.username $DB_USER --server.password $DB_PASSWORD --server.database $DB_NAME --javascript.execute-string "
+            // Clean up old data (older than 30 days)
+            var cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - 30);
+            
+            db._query('FOR doc IN users FILTER doc.createdAt < @cutoff REMOVE doc IN users', {
+              cutoff: cutoffDate.toISOString()
+            });
+            
+            print('Data cleanup completed');
+          "
+      env:
+        - name: DB_HOST
+          value: "arangodb-single"
+        - name: DB_PORT
+          value: "8529"
+        - name: DB_NAME
+          value: "myapp"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: ARANGO_USERNAME
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: ARANGO_PASSWORD
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 200m
+          memory: 256Mi
+
+# Enable service account and RBAC
+serviceAccount:
+  create: true
+  annotations:
+    app.kubernetes.io/managed-by: database-operator
+
+rbac:
+  create: true
+
+# Security context
+podSecurityContext:
+  enabled: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  enabled: true
+  capabilities:
+    drop:
+      - ALL
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000

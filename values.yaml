@@ -1,0 +1,587 @@
+# Default values for database-operator
+# This is a YAML-formatted file.
+
+nameOverride: ""
+fullnameOverride: "database-operator"
+timezone: "UTC"
+
+# Global image pull secrets configuration (optional)
+# Only needed for private registries
+imagePullSecrets: []
+# - name: regcred
+
+# Global security context settings (can be overridden by individual jobs/cronjobs)
+podSecurityContext:
+  enabled: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+# Default container security context
+containerSecurityContext:
+  enabled: true
+  capabilities:
+    drop:
+      - ALL
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# Service Account configuration
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# RBAC configuration
+rbac:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "pods/log", "configmaps", "secrets", "persistentvolumeclaims"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: ["batch"]
+      resources: ["jobs", "cronjobs"]
+      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# Database configurations
+# Define your database instances here
+databases:
+  # PostgreSQL configuration
+  postgresql:
+    enabled: false
+    type: postgresql
+    host: postgresql
+    port: 5432
+    database: myapp
+    ssl: false
+    # Schema management tool: liquibase, flyway, or custom
+    schemaTool: liquibase
+    # Backup configuration
+    backup:
+      enabled: false
+      schedule: "0 2 * * *"
+      retention: 7
+    # Maintenance operations
+    maintenance:
+      enabled: false
+      vacuumSchedule: "0 3 * * 0"
+      analyzeSchedule: "0 4 * * *"
+    # Custom operations
+    customOperations: []
+
+  # TimescaleDB configuration  
+  timescaledb:
+    enabled: false
+    type: timescaledb
+    host: timescaledb
+    port: 5432
+    database: tsdb
+    ssl: false
+    schemaTool: liquibase
+    backup:
+      enabled: false
+      schedule: "0 2 * * *"
+      retention: 7
+    maintenance:
+      enabled: false
+      compressionSchedule: "0 1 * * *"
+      retentionSchedule: "0 5 * * *"
+    customOperations: []
+
+  # MySQL configuration
+  mysql:
+    enabled: false
+    type: mysql
+    host: mysql
+    port: 3306
+    database: myapp
+    ssl: false
+    schemaTool: liquibase
+    backup:
+      enabled: false
+      schedule: "0 2 * * *"
+      retention: 7
+    maintenance:
+      enabled: false
+      optimizeSchedule: "0 3 * * 0"
+    customOperations: []
+
+  # ArangoDB configuration
+  arangodb:
+    enabled: false
+    type: arangodb
+    host: arangodb
+    port: 8529
+    database: myapp
+    ssl: false
+    schemaTool: custom
+    backup:
+      enabled: false
+      schedule: "0 2 * * *"
+      retention: 7
+    maintenance:
+      enabled: false
+      compactionSchedule: "0 4 * * 0"
+    customOperations: []
+
+  # MongoDB configuration
+  mongodb:
+    enabled: false
+    type: mongodb
+    host: mongodb
+    port: 27017
+    database: myapp
+    ssl: false
+    schemaTool: custom
+    backup:
+      enabled: false
+      schedule: "0 2 * * *"
+      retention: 7
+    maintenance:
+      enabled: false
+      indexOptimizationSchedule: "0 3 * * 0"
+    customOperations: []
+
+# Database credentials configuration
+secrets:
+  database-credentials:
+    create: true
+    type: Opaque
+    annotations: {}
+    data:
+      # PostgreSQL credentials
+      POSTGRES_USERNAME: "YWRtaW4="  # admin
+      POSTGRES_PASSWORD: "cGFzc3dvcmQ="  # password
+      
+      # TimescaleDB credentials (can be same as PostgreSQL)
+      TIMESCALE_USERNAME: "YWRtaW4="  # admin
+      TIMESCALE_PASSWORD: "cGFzc3dvcmQ="  # password
+      
+      # MySQL credentials
+      MYSQL_USERNAME: "YWRtaW4="  # admin
+      MYSQL_PASSWORD: "cGFzc3dvcmQ="  # password
+      
+      # ArangoDB credentials
+      ARANGO_USERNAME: "YWRtaW4="  # admin
+      ARANGO_PASSWORD: "cGFzc3dvcmQ="  # password
+      
+      # MongoDB credentials
+      MONGODB_USERNAME: "YWRtaW4="  # admin
+      MONGODB_PASSWORD: "cGFzc3dvcmQ="  # password
+
+# SealedSecrets configuration (alternative to regular secrets)
+sealedSecrets:
+  database-credentials:
+    enabled: false
+    name: database-credentials-sealed
+    type: Opaque
+    annotations: {}
+    template:
+      metadata:
+        annotations: {}
+    encryptedData: {}
+
+# Storage Classes configuration
+storageClasses: {}
+  # Example:
+  # fast-ssd:
+  #   enabled: true
+  #   provisioner: kubernetes.io/gce-pd
+  #   reclaimPolicy: Delete
+  #   volumeBindingMode: WaitForFirstConsumer
+  #   allowVolumeExpansion: true
+  #   parameters:
+  #     type: pd-ssd
+
+# Persistent Volume Claims configuration
+persistentVolumeClaims:
+  # Backup storage
+  backup-storage:
+    enabled: false
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: standard
+    storage: 50Gi
+    annotations: {}
+
+  # Scripts and configuration storage
+  scripts-storage:
+    enabled: false
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: standard
+    storage: 1Gi
+    annotations: {}
+
+# ConfigMaps for custom scripts and configurations
+configMaps:
+  # Database scripts
+  database-scripts:
+    enabled: false
+    data: {}
+      # Example:
+      # postgresql-backup.sh: |
+      #   #!/bin/bash
+      #   pg_dump -h $DB_HOST -U $DB_USER -d $DB_NAME > /backup/backup.sql
+      # mysql-backup.sh: |
+      #   #!/bin/bash
+      #   mysqldump -h $DB_HOST -u $DB_USER -p$DB_PASSWORD $DB_NAME > /backup/backup.sql
+
+# Default container images for different database operations
+images:
+  # PostgreSQL/TimescaleDB operations
+  postgresql:
+    repository: postgres
+    tag: "15-alpine"
+    pullPolicy: IfNotPresent
+    
+  # MySQL operations
+  mysql:
+    repository: mysql
+    tag: "8.0"
+    pullPolicy: IfNotPresent
+    
+  # ArangoDB operations
+  arangodb:
+    repository: arangodb/arangodb
+    tag: "3.11.5"
+    pullPolicy: IfNotPresent
+    
+  # MongoDB operations
+  mongodb:
+    repository: mongo
+    tag: "7.0"
+    pullPolicy: IfNotPresent
+    
+  # Liquibase for schema management
+  liquibase:
+    repository: liquibase/liquibase
+    tag: "4.25"
+    pullPolicy: IfNotPresent
+    
+  # Flyway for schema management
+  flyway:
+    repository: flyway/flyway
+    tag: "10.1"
+    pullPolicy: IfNotPresent
+
+  # Custom database tools (you can build and host these)
+  dbtools:
+    repository: alpine
+    tag: "3.19"
+    pullPolicy: IfNotPresent
+
+# Schema management jobs
+schemaJobs:
+  # Enable/disable schema management
+  enabled: false
+  
+  # Default configuration for schema jobs
+  defaults:
+    restartPolicy: OnFailure
+    ttlSecondsAfterFinished: 300
+    backoffLimit: 3
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+    nodeSelector: {}
+    affinity: {}
+    tolerations: []
+    
+  # Schema job configurations per database
+  postgresql:
+    enabled: false
+    image:
+      repository: liquibase/liquibase
+      tag: "4.25"
+      pullPolicy: IfNotPresent
+    changelogFile: "db/changelog/db.changelog-master.xml"
+    command: ["liquibase"]
+    args:
+      - "update"
+      - "--url=jdbc:postgresql://$(DB_HOST):$(DB_PORT)/$(DB_NAME)"
+      - "--username=$(DB_USER)"
+      - "--password=$(DB_PASSWORD)"
+      - "--changelog-file=$(CHANGELOG_FILE)"
+    env:
+      - name: DB_HOST
+        value: "postgresql"
+      - name: DB_PORT
+        value: "5432"
+      - name: DB_NAME
+        value: "myapp"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: POSTGRES_USERNAME
+      - name: DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: POSTGRES_PASSWORD
+      - name: CHANGELOG_FILE
+        value: "db/changelog/db.changelog-master.xml"
+
+  mysql:
+    enabled: false
+    image:
+      repository: liquibase/liquibase
+      tag: "4.25"
+      pullPolicy: IfNotPresent
+    changelogFile: "db/changelog/db.changelog-master.xml"
+    command: ["liquibase"]
+    args:
+      - "update"
+      - "--url=jdbc:mysql://$(DB_HOST):$(DB_PORT)/$(DB_NAME)"
+      - "--username=$(DB_USER)"
+      - "--password=$(DB_PASSWORD)"
+      - "--changelog-file=$(CHANGELOG_FILE)"
+    env:
+      - name: DB_HOST
+        value: "mysql"
+      - name: DB_PORT
+        value: "3306"
+      - name: DB_NAME
+        value: "myapp"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: MYSQL_USERNAME
+      - name: DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: MYSQL_PASSWORD
+      - name: CHANGELOG_FILE
+        value: "db/changelog/db.changelog-master.xml"
+
+# Backup jobs configuration
+backupJobs:
+  enabled: false
+  
+  # Default configuration for backup jobs
+  defaults:
+    concurrencyPolicy: Forbid
+    failedJobsHistoryLimit: 3
+    successfulJobsHistoryLimit: 3
+    suspend: false
+    backoffLimit: 3
+    ttlSecondsAfterFinished: 86400
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+    nodeSelector: {}
+    affinity: {}
+    tolerations: []
+
+  # Backup job configurations per database
+  postgresql:
+    enabled: false
+    schedule: "0 2 * * *"
+    image:
+      repository: postgres
+      tag: "15-alpine"
+      pullPolicy: IfNotPresent
+    command: ["/bin/bash"]
+    args:
+      - -c
+      - |
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        pg_dump -h $DB_HOST -U $DB_USER -d $DB_NAME -F c -f /backup/postgresql_${DB_NAME}_${TIMESTAMP}.dump
+        find /backup -name "postgresql_${DB_NAME}_*.dump" -type f -mtime +7 -delete
+    env:
+      - name: DB_HOST
+        value: "postgresql"
+      - name: DB_NAME
+        value: "myapp"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: POSTGRES_USERNAME
+      - name: PGPASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: POSTGRES_PASSWORD
+    volumeMounts:
+      - name: backup-storage
+        mountPath: /backup
+    volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: backup-storage
+
+  mysql:
+    enabled: false
+    schedule: "0 2 * * *"
+    image:
+      repository: mysql
+      tag: "8.0"
+      pullPolicy: IfNotPresent
+    command: ["/bin/bash"]
+    args:
+      - -c
+      - |
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        mysqldump -h $DB_HOST -u $DB_USER -p$DB_PASSWORD $DB_NAME > /backup/mysql_${DB_NAME}_${TIMESTAMP}.sql
+        find /backup -name "mysql_${DB_NAME}_*.sql" -type f -mtime +7 -delete
+    env:
+      - name: DB_HOST
+        value: "mysql"
+      - name: DB_NAME
+        value: "myapp"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: MYSQL_USERNAME
+      - name: DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: MYSQL_PASSWORD
+    volumeMounts:
+      - name: backup-storage
+        mountPath: /backup
+    volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: backup-storage
+
+# Maintenance jobs configuration
+maintenanceJobs:
+  enabled: false
+  
+  # Default configuration for maintenance jobs
+  defaults:
+    concurrencyPolicy: Forbid
+    failedJobsHistoryLimit: 3
+    successfulJobsHistoryLimit: 1
+    suspend: false
+    backoffLimit: 3
+    ttlSecondsAfterFinished: 86400
+    resources:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+    nodeSelector: {}
+    affinity: {}
+    tolerations: []
+
+  # Maintenance job configurations per database
+  postgresql:
+    vacuum:
+      enabled: false
+      schedule: "0 3 * * 0"  # Weekly
+      image:
+        repository: postgres
+        tag: "15-alpine"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          psql -h $DB_HOST -U $DB_USER -d $DB_NAME -c "VACUUM ANALYZE;"
+      env:
+        - name: DB_HOST
+          value: "postgresql"
+        - name: DB_NAME
+          value: "myapp"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: POSTGRES_USERNAME
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: POSTGRES_PASSWORD
+
+  mysql:
+    optimize:
+      enabled: false
+      schedule: "0 3 * * 0"  # Weekly
+      image:
+        repository: mysql
+        tag: "8.0"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          mysql -h $DB_HOST -u $DB_USER -p$DB_PASSWORD $DB_NAME -e "OPTIMIZE TABLE table_name;"
+      env:
+        - name: DB_HOST
+          value: "mysql"
+        - name: DB_NAME
+          value: "myapp"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: MYSQL_USERNAME
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: MYSQL_PASSWORD
+
+# Custom operations configuration
+customOperations:
+  enabled: false
+  
+  # Jobs for custom operations
+  jobs: {}
+    # Example:
+    # data-migration:
+    #   enabled: false
+    #   image:
+    #     repository: custom/migration-tool
+    #     tag: "1.0.0"
+    #   command: ["python"]
+    #   args: ["migrate.py"]
+    #   env: []
+    #   resources:
+    #     limits:
+    #       cpu: 1000m
+    #       memory: 1Gi
+    #     requests:
+    #       cpu: 200m
+    #       memory: 256Mi
+  
+  # CronJobs for custom operations
+  cronJobs: {}
+    # Example:
+    # data-sync:
+    #   enabled: false
+    #   schedule: "0 4 * * *"
+    #   image:
+    #     repository: custom/sync-tool
+    #     tag: "1.0.0"
+    #   command: ["python"]
+    #   args: ["sync.py"]
+    #   env: []
+    #   resources:
+    #     limits:
+    #       cpu: 500m
+    #       memory: 512Mi
+    #     requests:
+    #       cpu: 100m
+    #       memory: 128Mi

@@ -1,0 +1,39 @@
+apiVersion: v2
+name: database-operator
+description: A universal Helm chart for database operations including schema management, backups, and maintenance tasks for PostgreSQL, TimescaleDB, MySQL, ArangoDB, and MongoDB
+type: application
+version: 2.0.0
+appVersion: "2.0.0"
+keywords:
+  - database
+  - operator
+  - schema
+  - backup
+  - maintenance
+  - migration
+  - postgresql
+  - postgres
+  - timescaledb
+  - mysql
+  - arangodb
+  - mongodb
+  - liquibase
+  - flyway
+home: https://github.com/selvarajmurugesan90/database-operator
+sources:
+  - https://github.com/selvarajmurugesan90/database-operator
+maintainers:
+  - name: Selvaraj Murugesan
+    email: selvarajmurugesan90@gmail.com
+    url: https://github.com/selvarajmurugesan90
+annotations:
+  artifacthub.io/changes: |
+    - Universal database operator supporting PostgreSQL, TimescaleDB, MySQL, ArangoDB, and MongoDB
+    - Flexible schema management with Liquibase and Flyway support
+    - Automated backup and maintenance operations
+    - Production-ready with security best practices
+  artifacthub.io/recommendations: |
+    - Use with Kubernetes 1.19+
+    - Configure appropriate storage classes for persistent volumes
+    - Enable RBAC for security
+  artifacthub.io/license: MIT

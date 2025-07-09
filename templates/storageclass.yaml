@@ -1,0 +1,31 @@
+{{- if .Values.storageClasses -}}
+{{- range $name, $storageClass := .Values.storageClasses }}
+{{- if $storageClass.enabled }}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "database-operator.labels" $ | nindent 4 }}
+  {{- with $storageClass.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+provisioner: {{ $storageClass.provisioner }}
+{{- if $storageClass.parameters }}
+parameters:
+  {{- toYaml $storageClass.parameters | nindent 2 }}
+{{- end }}
+{{- if $storageClass.reclaimPolicy }}
+reclaimPolicy: {{ $storageClass.reclaimPolicy }}
+{{- end }}
+{{- if $storageClass.volumeBindingMode }}
+volumeBindingMode: {{ $storageClass.volumeBindingMode }}
+{{- end }}
+{{- if $storageClass.allowVolumeExpansion }}
+allowVolumeExpansion: {{ $storageClass.allowVolumeExpansion }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

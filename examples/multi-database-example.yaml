@@ -1,0 +1,571 @@
+# Multi-Database Operator Example Configuration
+# This example shows how to configure the database operator for multiple databases
+
+nameOverride: "multi-db-ops"
+fullnameOverride: "multi-database-operator"
+
+# Multiple database configurations
+databases:
+  # Primary application database (PostgreSQL)
+  postgresql:
+    enabled: true
+    type: postgresql
+    host: postgresql-primary
+    port: 5432
+    database: myapp
+    ssl: false
+    schemaTool: liquibase
+
+  # Time-series data (TimescaleDB)
+  timescaledb:
+    enabled: true
+    type: timescaledb
+    host: timescaledb-primary
+    port: 5432
+    database: tsdb
+    ssl: false
+    schemaTool: liquibase
+
+  # Caching and session storage (Redis - as custom operation)
+  redis:
+    enabled: true
+    type: redis
+    host: redis-master
+    port: 6379
+    database: "0"
+    ssl: false
+    schemaTool: custom
+
+  # Document storage (MongoDB)
+  mongodb:
+    enabled: true
+    type: mongodb
+    host: mongodb-primary
+    port: 27017
+    database: documents
+    ssl: false
+    schemaTool: custom
+
+# Enable schema management for SQL databases
+schemaJobs:
+  enabled: true
+  
+  # PostgreSQL schema management
+  postgresql:
+    enabled: true
+    image:
+      repository: liquibase/liquibase
+      tag: "4.25"
+      pullPolicy: IfNotPresent
+    changelogFile: "db/changelog/postgresql.changelog-master.xml"
+    command: ["liquibase"]
+    args:
+      - "update"
+      - "--url=jdbc:postgresql://$(DB_HOST):$(DB_PORT)/$(DB_NAME)"
+      - "--username=$(DB_USER)"
+      - "--password=$(DB_PASSWORD)"
+      - "--changelog-file=$(CHANGELOG_FILE)"
+    env:
+      - name: DB_HOST
+        value: "postgresql-primary"
+      - name: DB_PORT
+        value: "5432"
+      - name: DB_NAME
+        value: "myapp"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: POSTGRES_USERNAME
+      - name: DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: POSTGRES_PASSWORD
+      - name: CHANGELOG_FILE
+        value: "db/changelog/postgresql.changelog-master.xml"
+
+  # TimescaleDB schema management
+  timescaledb:
+    enabled: true
+    image:
+      repository: liquibase/liquibase
+      tag: "4.25"
+      pullPolicy: IfNotPresent
+    changelogFile: "db/changelog/timescaledb.changelog-master.xml"
+    command: ["liquibase"]
+    args:
+      - "update"
+      - "--url=jdbc:postgresql://$(DB_HOST):$(DB_PORT)/$(DB_NAME)"
+      - "--username=$(DB_USER)"
+      - "--password=$(DB_PASSWORD)"
+      - "--changelog-file=$(CHANGELOG_FILE)"
+    env:
+      - name: DB_HOST
+        value: "timescaledb-primary"
+      - name: DB_PORT
+        value: "5432"
+      - name: DB_NAME
+        value: "tsdb"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: TIMESCALE_USERNAME
+      - name: DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: TIMESCALE_PASSWORD
+      - name: CHANGELOG_FILE
+        value: "db/changelog/timescaledb.changelog-master.xml"
+
+# Enable backup jobs for all databases
+backupJobs:
+  enabled: true
+  
+  # PostgreSQL backup
+  postgresql:
+    enabled: true
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    image:
+      repository: postgres
+      tag: "15-alpine"
+      pullPolicy: IfNotPresent
+    command: ["/bin/bash"]
+    args:
+      - -c
+      - |
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        pg_dump -h $DB_HOST -U $DB_USER -d $DB_NAME -F c -f /backup/postgresql_${DB_NAME}_${TIMESTAMP}.dump
+        find /backup -name "postgresql_${DB_NAME}_*.dump" -type f -mtime +7 -delete
+    env:
+      - name: DB_HOST
+        value: "postgresql-primary"
+      - name: DB_NAME
+        value: "myapp"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: POSTGRES_USERNAME
+      - name: PGPASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: POSTGRES_PASSWORD
+    volumeMounts:
+      - name: backup-storage
+        mountPath: /backup
+    volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: backup-storage
+
+  # TimescaleDB backup
+  timescaledb:
+    enabled: true
+    schedule: "0 3 * * *"  # Daily at 3 AM
+    image:
+      repository: postgres
+      tag: "15-alpine"
+      pullPolicy: IfNotPresent
+    command: ["/bin/bash"]
+    args:
+      - -c
+      - |
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        pg_dump -h $DB_HOST -U $DB_USER -d $DB_NAME -F c -f /backup/timescaledb_${DB_NAME}_${TIMESTAMP}.dump
+        find /backup -name "timescaledb_${DB_NAME}_*.dump" -type f -mtime +7 -delete
+    env:
+      - name: DB_HOST
+        value: "timescaledb-primary"
+      - name: DB_NAME
+        value: "tsdb"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: TIMESCALE_USERNAME
+      - name: PGPASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: TIMESCALE_PASSWORD
+    volumeMounts:
+      - name: backup-storage
+        mountPath: /backup
+    volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: backup-storage
+
+  # MongoDB backup
+  mongodb:
+    enabled: true
+    schedule: "0 4 * * *"  # Daily at 4 AM
+    image:
+      repository: mongo
+      tag: "6.0"
+      pullPolicy: IfNotPresent
+    command: ["/bin/bash"]
+    args:
+      - -c
+      - |
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        mongodump --host $DB_HOST:$DB_PORT --db $DB_NAME --username $DB_USER --password $DB_PASSWORD --out /backup/mongodb_${DB_NAME}_${TIMESTAMP}
+        tar -czf /backup/mongodb_${DB_NAME}_${TIMESTAMP}.tar.gz -C /backup mongodb_${DB_NAME}_${TIMESTAMP}
+        rm -rf /backup/mongodb_${DB_NAME}_${TIMESTAMP}
+        find /backup -name "mongodb_${DB_NAME}_*.tar.gz" -type f -mtime +7 -delete
+    env:
+      - name: DB_HOST
+        value: "mongodb-primary"
+      - name: DB_PORT
+        value: "27017"
+      - name: DB_NAME
+        value: "documents"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: MONGODB_USERNAME
+      - name: DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: MONGODB_PASSWORD
+    volumeMounts:
+      - name: backup-storage
+        mountPath: /backup
+    volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: backup-storage
+
+# Enable maintenance jobs
+maintenanceJobs:
+  enabled: true
+  
+  # PostgreSQL maintenance
+  postgresql:
+    vacuum:
+      enabled: true
+      schedule: "0 1 * * 0"  # Weekly on Sunday at 1 AM
+      image:
+        repository: postgres
+        tag: "15-alpine"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          psql -h $DB_HOST -U $DB_USER -d $DB_NAME -c "VACUUM ANALYZE;"
+      env:
+        - name: DB_HOST
+          value: "postgresql-primary"
+        - name: DB_NAME
+          value: "myapp"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: POSTGRES_USERNAME
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: POSTGRES_PASSWORD
+
+  # TimescaleDB maintenance
+  timescaledb:
+    compression:
+      enabled: true
+      schedule: "0 2 * * 0"  # Weekly on Sunday at 2 AM
+      image:
+        repository: postgres
+        tag: "15-alpine"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          psql -h $DB_HOST -U $DB_USER -d $DB_NAME -c "
+            SELECT compress_chunk(i) FROM show_chunks('metrics', older_than => INTERVAL '1 day') i;
+            VACUUM ANALYZE;
+          "
+      env:
+        - name: DB_HOST
+          value: "timescaledb-primary"
+        - name: DB_NAME
+          value: "tsdb"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_USERNAME
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_PASSWORD
+
+# Enable backup storage
+persistentVolumeClaims:
+  backup-storage:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: standard
+    storage: 500Gi  # More storage for multiple databases
+    annotations:
+      backup.policy: "daily"
+
+# Database credentials for all databases
+secrets:
+  database-credentials:
+    create: true
+    type: Opaque
+    data:
+      # PostgreSQL credentials
+      POSTGRES_USERNAME: "YWRtaW4="  # admin (base64 encoded)
+      POSTGRES_PASSWORD: "cGFzc3dvcmQ="  # password (base64 encoded)
+      
+      # TimescaleDB credentials
+      TIMESCALE_USERNAME: "YWRtaW4="  # admin (base64 encoded)
+      TIMESCALE_PASSWORD: "cGFzc3dvcmQ="  # password (base64 encoded)
+      
+      # MongoDB credentials
+      MONGODB_USERNAME: "YWRtaW4="  # admin (base64 encoded)
+      MONGODB_PASSWORD: "cGFzc3dvcmQ="  # password (base64 encoded)
+      
+      # Redis credentials
+      REDIS_PASSWORD: "cGFzc3dvcmQ="  # password (base64 encoded)
+
+# Custom operations for multi-database environment
+customOperations:
+  enabled: true
+  
+  # Data synchronization jobs
+  jobs:
+    data-sync:
+      enabled: true
+      image:
+        repository: postgres
+        tag: "15-alpine"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          # Sync data from PostgreSQL to TimescaleDB
+          psql -h postgresql-primary -U $POSTGRES_USER -d myapp -c "
+            COPY (SELECT * FROM user_activities WHERE created_at > NOW() - INTERVAL '1 hour') TO STDOUT WITH CSV HEADER;
+          " | psql -h timescaledb-primary -U $TIMESCALE_USER -d tsdb -c "
+            COPY user_activities_timeseries FROM STDIN WITH CSV HEADER;
+          "
+      env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: POSTGRES_USERNAME
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: POSTGRES_PASSWORD
+        - name: TIMESCALE_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_USERNAME
+        - name: TIMESCALE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_PASSWORD
+      resources:
+        limits:
+          cpu: 1000m
+          memory: 1Gi
+        requests:
+          cpu: 500m
+          memory: 512Mi
+
+  # Scheduled operations
+  cronJobs:
+    multi-db-health-check:
+      enabled: true
+      schedule: "*/5 * * * *"  # Every 5 minutes
+      image:
+        repository: postgres
+        tag: "15-alpine"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          # Check PostgreSQL
+          psql -h postgresql-primary -U $POSTGRES_USER -d myapp -c "SELECT 1;" > /dev/null 2>&1
+          if [ $? -ne 0 ]; then
+            echo "PostgreSQL health check failed"
+            exit 1
+          fi
+          
+          # Check TimescaleDB
+          psql -h timescaledb-primary -U $TIMESCALE_USER -d tsdb -c "SELECT 1;" > /dev/null 2>&1
+          if [ $? -ne 0 ]; then
+            echo "TimescaleDB health check failed"
+            exit 1
+          fi
+          
+          echo "All database health checks passed"
+      env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: POSTGRES_USERNAME
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: POSTGRES_PASSWORD
+        - name: TIMESCALE_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_USERNAME
+        - name: TIMESCALE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_PASSWORD
+      resources:
+        limits:
+          cpu: 100m
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+
+    cache-warming:
+      enabled: true
+      schedule: "0 */6 * * *"  # Every 6 hours
+      image:
+        repository: redis
+        tag: "7-alpine"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          # Connect to Redis and warm up cache with frequently accessed data
+          redis-cli -h redis-master -p 6379 -a $REDIS_PASSWORD ping
+          if [ $? -eq 0 ]; then
+            echo "Redis cache warming job started"
+            # Add cache warming logic here
+            redis-cli -h redis-master -p 6379 -a $REDIS_PASSWORD set cache_warmed "$(date)"
+          else
+            echo "Redis connection failed"
+            exit 1
+          fi
+      env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: REDIS_PASSWORD
+      resources:
+        limits:
+          cpu: 200m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+
+    database-metrics:
+      enabled: true
+      schedule: "0 */2 * * *"  # Every 2 hours
+      image:
+        repository: postgres
+        tag: "15-alpine"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          # Collect metrics from all databases
+          echo "Collecting database metrics..."
+          
+          # PostgreSQL metrics
+          psql -h postgresql-primary -U $POSTGRES_USER -d myapp -c "
+            SELECT 
+              'postgresql' as db_type,
+              count(*) as total_connections,
+              NOW() as collected_at
+            FROM pg_stat_activity;
+          "
+          
+          # TimescaleDB metrics
+          psql -h timescaledb-primary -U $TIMESCALE_USER -d tsdb -c "
+            SELECT 
+              'timescaledb' as db_type,
+              count(*) as total_chunks,
+              NOW() as collected_at
+            FROM timescaledb_information.chunks;
+          "
+      env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: POSTGRES_USERNAME
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: POSTGRES_PASSWORD
+        - name: TIMESCALE_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_USERNAME
+        - name: TIMESCALE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: TIMESCALE_PASSWORD
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 200m
+          memory: 256Mi
+
+# Enable service account and RBAC
+serviceAccount:
+  create: true
+  annotations:
+    app.kubernetes.io/managed-by: database-operator
+
+rbac:
+  create: true
+
+# Security context
+podSecurityContext:
+  enabled: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  enabled: true
+  capabilities:
+    drop:
+      - ALL
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000

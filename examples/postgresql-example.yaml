@@ -1,0 +1,171 @@
+# PostgreSQL Database Operator Example Configuration
+# This example shows how to configure the database operator for PostgreSQL
+
+nameOverride: "postgresql-ops"
+fullnameOverride: "postgresql-database-operator"
+
+# PostgreSQL database configuration
+databases:
+  postgresql:
+    enabled: true
+    type: postgresql
+    host: postgresql-primary
+    port: 5432
+    database: myapp
+    ssl: false
+    schemaTool: liquibase
+
+# Enable schema management
+schemaJobs:
+  enabled: true
+  postgresql:
+    enabled: true
+    image:
+      repository: liquibase/liquibase
+      tag: "4.25"
+      pullPolicy: IfNotPresent
+    changelogFile: "db/changelog/db.changelog-master.xml"
+    command: ["liquibase"]
+    args:
+      - "update"
+      - "--url=jdbc:postgresql://$(DB_HOST):$(DB_PORT)/$(DB_NAME)"
+      - "--username=$(DB_USER)"
+      - "--password=$(DB_PASSWORD)"
+      - "--changelog-file=$(CHANGELOG_FILE)"
+    env:
+      - name: DB_HOST
+        value: "postgresql-primary"
+      - name: DB_PORT
+        value: "5432"
+      - name: DB_NAME
+        value: "myapp"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: POSTGRES_USERNAME
+      - name: DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: POSTGRES_PASSWORD
+      - name: CHANGELOG_FILE
+        value: "db/changelog/db.changelog-master.xml"
+
+# Enable backup jobs
+backupJobs:
+  enabled: true
+  postgresql:
+    enabled: true
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    image:
+      repository: postgres
+      tag: "15-alpine"
+      pullPolicy: IfNotPresent
+    command: ["/bin/bash"]
+    args:
+      - -c
+      - |
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        pg_dump -h $DB_HOST -U $DB_USER -d $DB_NAME -F c -f /backup/postgresql_${DB_NAME}_${TIMESTAMP}.dump
+        find /backup -name "postgresql_${DB_NAME}_*.dump" -type f -mtime +7 -delete
+    env:
+      - name: DB_HOST
+        value: "postgresql-primary"
+      - name: DB_NAME
+        value: "myapp"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: POSTGRES_USERNAME
+      - name: PGPASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: database-credentials
+            key: POSTGRES_PASSWORD
+    volumeMounts:
+      - name: backup-storage
+        mountPath: /backup
+    volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: backup-storage
+
+# Enable maintenance jobs
+maintenanceJobs:
+  enabled: true
+  postgresql:
+    vacuum:
+      enabled: true
+      schedule: "0 3 * * 0"  # Weekly on Sunday at 3 AM
+      image:
+        repository: postgres
+        tag: "15-alpine"
+        pullPolicy: IfNotPresent
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          psql -h $DB_HOST -U $DB_USER -d $DB_NAME -c "VACUUM ANALYZE;"
+      env:
+        - name: DB_HOST
+          value: "postgresql-primary"
+        - name: DB_NAME
+          value: "myapp"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: POSTGRES_USERNAME
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: POSTGRES_PASSWORD
+
+# Enable backup storage
+persistentVolumeClaims:
+  backup-storage:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: standard
+    storage: 100Gi
+    annotations:
+      backup.policy: "daily"
+
+# Database credentials
+secrets:
+  database-credentials:
+    create: true
+    type: Opaque
+    data:
+      POSTGRES_USERNAME: "YWRtaW4="  # admin (base64 encoded)
+      POSTGRES_PASSWORD: "cGFzc3dvcmQ="  # password (base64 encoded)
+
+# Enable service account and RBAC
+serviceAccount:
+  create: true
+  annotations:
+    app.kubernetes.io/managed-by: database-operator
+
+rbac:
+  create: true
+
+# Security context
+podSecurityContext:
+  enabled: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  enabled: true
+  capabilities:
+    drop:
+      - ALL
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000

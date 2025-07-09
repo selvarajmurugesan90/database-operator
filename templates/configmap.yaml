@@ -1,0 +1,20 @@
+{{- if .Values.configMaps -}}
+{{- range $name, $configMap := .Values.configMaps }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "database-operator.labels" $ | nindent 4 }}
+  {{- with $configMap.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  {{- range $key, $value := $configMap.data }}
+  {{ $key }}: |-
+    {{ $value | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}
