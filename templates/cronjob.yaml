@@ -1,9 +1,34 @@
+{{/*
+  CRONJOB TEMPLATE
+  
+  This template creates Kubernetes CronJob resources for scheduled database operations.
+  It iterates over all entries in .Values.cronJobs and creates a CronJob for each enabled entry.
+  
+  Use cases:
+  - Automated database backups
+  - Periodic maintenance (VACUUM, ANALYZE, OPTIMIZE)
+  - Scheduled data exports
+  - Regular health checks
+  - Log rotation and cleanup
+  
+  Configuration: Define cronjobs in values.yaml under the 'cronJobs:' key
+  
+  Note: This template inherits all features from job.yaml and adds scheduling capabilities
+*/}}
 {{- if .Values.cronJobs }}
+{{/* Iterate over all cronjob definitions in values.yaml */}}
 {{- range $name, $cronJob := .Values.cronJobs }}
+{{/* Only create CronJob if enabled: true */}}
 {{- if $cronJob.enabled }}
+---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
+  {{/* 
+    Generate cronjob name (same logic as Job template)
+    - If generateName is true: append image tag version
+    - Otherwise: use simple name
+  */}}
   {{- if $cronJob.generateName }}
   name: {{ include "database-operator.fullname" $ }}-{{ $name }}-{{ $cronJob.image.tag | default "1.0.0" | replace "." "-" | trunc 63 | trimSuffix "-" }}
   {{- else }}
@@ -19,13 +44,54 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
+  {{/*
+    SCHEDULING CONFIGURATION
+    
+    schedule: Cron expression (e.g., "0 2 * * *" for daily at 2 AM)
+    Format: minute hour day-of-month month day-of-week
+    Examples:
+      "0 2 * * *"      - Every day at 2:00 AM
+      "*/15 * * * *"   - Every 15 minutes
+      "0 0 * * 0"      - Every Sunday at midnight
+      "0 3 1 * *"      - First day of every month at 3 AM
+  */}}
   schedule: {{ $cronJob.schedule | quote }}
+  {{/*
+    timeZone: Timezone for schedule (default: UTC)
+    Can be overridden per cronjob or globally
+    Examples: "America/New_York", "Europe/London", "Asia/Tokyo"
+  */}}
   timeZone: {{ $cronJob.timezone | default $.Values.timezone | default "UTC" | quote }}
+  {{/*
+    startingDeadlineSeconds: Maximum time to start a job if it misses its scheduled time
+    If a job misses this deadline, it's counted as failed and won't run until next schedule
+    Default: 180 seconds (3 minutes)
+  */}}
   startingDeadlineSeconds: {{ $cronJob.startingDeadlineSeconds | default 180 }}
+  {{/*
+    concurrencyPolicy: How to handle concurrent job executions
+    - Forbid: Don't start new job if previous one is still running (recommended for backups)
+    - Allow: Allow concurrent executions (useful for independent operations)
+    - Replace: Cancel existing job and start new one
+  */}}
   concurrencyPolicy: {{ $cronJob.concurrencyPolicy | default "Forbid" }}
+  {{/*
+    Job History Limits
+    Controls how many completed jobs to keep for debugging and monitoring
+  */}}
   failedJobsHistoryLimit: {{ $cronJob.failedJobsHistoryLimit | default 3 }}
   successfulJobsHistoryLimit: {{ $cronJob.successfulJobsHistoryLimit | default 3 }}
+  {{/*
+    suspend: Pause cronjob without deleting it
+    Set to true to temporarily stop scheduled executions
+  */}}
   suspend: {{ $cronJob.suspend | default false }}
+  {{/*
+    JOB TEMPLATE
+    
+    Everything inside jobTemplate.spec.template is identical to the Job template
+    Each scheduled execution creates a Job from this template
+  */}}
   jobTemplate:
     spec:
       template:
