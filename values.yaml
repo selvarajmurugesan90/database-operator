@@ -1,77 +1,163 @@
+# ============================================================================
+# Database Operator Helm Chart - Values Configuration
+# ============================================================================
+# This file contains all configurable values for the database-operator chart.
+# 
+# Quick Start:
+# 1. Enable the database type(s) you want to manage
+# 2. Configure connection parameters
+# 3. Enable desired operations (schema, backup, maintenance)
+# 4. Set up secrets for credentials
+# 5. Configure storage for backups (if needed)
+#
+# Documentation: See README.md and ARCHITECTURE.md for detailed information
+# ============================================================================
+
 # Default values for database-operator
 # This is a YAML-formatted file.
 
+# ============================================================================
+# GLOBAL SETTINGS
+# ============================================================================
+
+# Override the chart name (default: database-operator)
 nameOverride: ""
+
+# Override the full resource name (default: <release-name>-database-operator)
+# Useful when you need a specific resource naming pattern
 fullnameOverride: "database-operator"
+
+# Default timezone for all CronJob schedules
+# Can be overridden per CronJob if needed
+# Examples: "UTC", "America/New_York", "Europe/London", "Asia/Tokyo"
 timezone: "UTC"
 
+# ============================================================================
+# IMAGE PULL SECRETS
+# ============================================================================
 # Global image pull secrets configuration (optional)
-# Only needed for private registries
+# Only needed if using images from private container registries
+# These apply to all jobs and cronjobs unless overridden
 imagePullSecrets: []
+# Example:
 # - name: regcred
+# - name: dockerhub-secret
+
+# ============================================================================
+# SECURITY CONTEXTS
+# ============================================================================
+# Security contexts enforce secure defaults for all pods
+# Can be overridden by individual jobs/cronjobs if needed
 
 # Global security context settings (can be overridden by individual jobs/cronjobs)
+# Applied at the pod level - affects all containers in the pod
 podSecurityContext:
   enabled: true
+  # Run containers as non-root user (security best practice)
   runAsNonRoot: true
+  # User ID to run containers as (1000 is a safe default)
   runAsUser: 1000
+  # Group ID for volumes (matches runAsUser for file permissions)
   fsGroup: 1000
 
 # Default container security context
+# Applied at the container level - more specific than pod context
 containerSecurityContext:
   enabled: true
+  # Drop all Linux capabilities (principle of least privilege)
   capabilities:
     drop:
       - ALL
+  # Prevent container from gaining additional privileges
   allowPrivilegeEscalation: false
+  # Note: readOnlyRootFilesystem is false because database tools often need write access
   readOnlyRootFilesystem: false
   runAsNonRoot: true
   runAsUser: 1000
 
+# ============================================================================
+# SERVICE ACCOUNT & RBAC
+# ============================================================================
+
 # Service Account configuration
+# Creates a dedicated service account for database operations
 serviceAccount:
+  # Whether to create a service account (recommended: true)
   create: true
+  # Annotations for the service account (e.g., for workload identity)
+  # Example for AWS: eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/ROLE
+  # Example for GCP: iam.gke.io/gcp-service-account: GSA@PROJECT.iam.gserviceaccount.com
   annotations: {}
+  # Override the service account name (default: generated from chart name)
   name: ""
 
 # RBAC configuration
+# Creates Role/ClusterRole and RoleBinding/ClusterRoleBinding
 rbac:
+  # Whether to create RBAC resources (recommended: true)
   create: true
+  # Permissions required for database operations
+  # These are minimal permissions - adjust based on your security requirements
   rules:
+    # Read access to pods, logs, and configuration
     - apiGroups: [""]
       resources: ["pods", "pods/log", "configmaps", "secrets", "persistentvolumeclaims"]
       verbs: ["get", "list", "watch"]
+    # Full access to jobs and cronjobs (required for creating/managing operations)
     - apiGroups: ["batch"]
       resources: ["jobs", "cronjobs"]
       verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
-# Database configurations
+# ============================================================================
+# DATABASE CONFIGURATIONS
+# ============================================================================
 # Define your database instances here
+# Each database type has its own configuration section
+# Enable only the database types you need to manage
+
 databases:
-  # PostgreSQL configuration
+  # ============================================================================
+  # POSTGRESQL CONFIGURATION
+  # ============================================================================
+  # PostgreSQL is a powerful, open source relational database
+  # Supports: Schema management with Liquibase/Flyway, automated backups, VACUUM operations
   postgresql:
+    # Enable PostgreSQL operations (set to true to activate)
     enabled: false
     type: postgresql
+    # Database connection parameters
     host: postgresql
     port: 5432
     database: myapp
+    # SSL/TLS connection (set to true for encrypted connections)
     ssl: false
     # Schema management tool: liquibase, flyway, or custom
+    # liquibase: XML/YAML/JSON/SQL changesets with advanced features
+    # flyway: Simple SQL migration files with version control
+    # custom: Your own scripts (configure in jobs section)
     schemaTool: liquibase
     # Backup configuration
     backup:
       enabled: false
+      # Cron schedule for backups (default: daily at 2 AM UTC)
       schedule: "0 2 * * *"
+      # Retention period in days (older backups are automatically deleted)
       retention: 7
     # Maintenance operations
     maintenance:
       enabled: false
+      # VACUUM: Reclaims storage and updates statistics (recommended: weekly)
       vacuumSchedule: "0 3 * * 0"
+      # ANALYZE: Updates query planner statistics (recommended: daily)
       analyzeSchedule: "0 4 * * *"
-    # Custom operations
+    # Custom operations (define in jobs/cronJobs sections)
     customOperations: []
 
-  # TimescaleDB configuration  
+  # ============================================================================
+  # TIMESCALEDB CONFIGURATION
+  # ============================================================================
+  # TimescaleDB is a time-series database built on PostgreSQL
+  # Adds: Hypertable compression, data retention policies, continuous aggregates
   timescaledb:
     enabled: false
     type: timescaledb
@@ -84,13 +170,20 @@ databases:
       enabled: false
       schedule: "0 2 * * *"
       retention: 7
+    # TimescaleDB-specific maintenance
     maintenance:
       enabled: false
+      # Compression: Compress old chunks to save storage (recommended: daily)
       compressionSchedule: "0 1 * * *"
+      # Retention: Drop old chunks based on retention policy
       retentionSchedule: "0 5 * * *"
     customOperations: []
 
-  # MySQL configuration
+  # ============================================================================
+  # MYSQL CONFIGURATION
+  # ============================================================================
+  # MySQL/MariaDB is a popular open source relational database
+  # Supports: Schema management, automated backups, table optimization
   mysql:
     enabled: false
     type: mysql
@@ -103,12 +196,18 @@ databases:
       enabled: false
       schedule: "0 2 * * *"
       retention: 7
+    # MySQL-specific maintenance
     maintenance:
       enabled: false
+      # OPTIMIZE TABLE: Reclaims unused space and defragments (recommended: weekly)
       optimizeSchedule: "0 3 * * 0"
     customOperations: []
 
-  # ArangoDB configuration
+  # ============================================================================
+  # ARANGODB CONFIGURATION
+  # ============================================================================
+  # ArangoDB is a multi-model database (documents, graphs, key-value)
+  # Supports: Custom schema management, automated backups, compaction
   arangodb:
     enabled: false
     type: arangodb
@@ -116,17 +215,24 @@ databases:
     port: 8529
     database: myapp
     ssl: false
+    # ArangoDB typically uses custom scripts for schema management
     schemaTool: custom
     backup:
       enabled: false
       schedule: "0 2 * * *"
       retention: 7
+    # ArangoDB-specific maintenance
     maintenance:
       enabled: false
+      # Compaction: Reclaims disk space (recommended: weekly)
       compactionSchedule: "0 4 * * 0"
     customOperations: []
 
-  # MongoDB configuration
+  # ============================================================================
+  # MONGODB CONFIGURATION
+  # ============================================================================
+  # MongoDB is a document-oriented NoSQL database
+  # Supports: Custom schema management, automated backups, index optimization
   mongodb:
     enabled: false
     type: mongodb
@@ -134,24 +240,38 @@ databases:
     port: 27017
     database: myapp
     ssl: false
+    # MongoDB typically uses custom scripts for schema management
     schemaTool: custom
     backup:
       enabled: false
       schedule: "0 2 * * *"
       retention: 7
+    # MongoDB-specific maintenance
     maintenance:
       enabled: false
+      # Index optimization: Rebuild indexes for better performance (recommended: weekly)
       indexOptimizationSchedule: "0 3 * * 0"
     customOperations: []
 
+# ============================================================================
+# SECRETS MANAGEMENT
+# ============================================================================
+# Store sensitive data like database credentials
+# Important: Never commit unencrypted secrets to version control!
 # Database credentials configuration
 secrets:
   database-credentials:
+    # Whether to create this secret (set to false if using existing secret)
     create: true
+    # Secret type (usually Opaque for database credentials)
     type: Opaque
     annotations: {}
+    # Data must be base64-encoded
+    # Use: echo -n 'your-password' | base64
+    # Decode: echo 'base64string' | base64 -d
     data:
       # PostgreSQL credentials
+      # Default: admin / password (CHANGE IN PRODUCTION!)
       POSTGRES_USERNAME: "YWRtaW4="  # admin
       POSTGRES_PASSWORD: "cGFzc3dvcmQ="  # password
       
@@ -171,42 +291,73 @@ secrets:
       MONGODB_USERNAME: "YWRtaW4="  # admin
       MONGODB_PASSWORD: "cGFzc3dvcmQ="  # password
 
+# ============================================================================
+# SEALEDSECRETS (GitOps-Friendly)
+# ============================================================================
+# SealedSecrets allow you to safely commit encrypted secrets to Git
+# Requires the SealedSecrets controller to be installed in your cluster
+# Use 'kubeseal' CLI to encrypt secrets before committing
 # SealedSecrets configuration (alternative to regular secrets)
 sealedSecrets:
   database-credentials:
+    # Enable SealedSecrets (disable regular secrets if using this)
     enabled: false
     name: database-credentials-sealed
     type: Opaque
     annotations: {}
+    # Template for the resulting Secret after decryption
     template:
       metadata:
         annotations: {}
+    # Encrypted data (use 'kubeseal' to generate)
+    # Example: kubeseal --format yaml < secret.yaml > sealedsecret.yaml
     encryptedData: {}
 
+# ============================================================================
+# STORAGE CONFIGURATION
+# ============================================================================
+
 # Storage Classes configuration
+# Define custom storage classes for different performance requirements
 storageClasses: {}
-  # Example:
+  # Example for fast SSD storage:
   # fast-ssd:
   #   enabled: true
-  #   provisioner: kubernetes.io/gce-pd
-  #   reclaimPolicy: Delete
-  #   volumeBindingMode: WaitForFirstConsumer
+  #   provisioner: kubernetes.io/gce-pd  # Cloud provider specific
+  #   reclaimPolicy: Delete  # or Retain
+  #   volumeBindingMode: WaitForFirstConsumer  # or Immediate
   #   allowVolumeExpansion: true
   #   parameters:
   #     type: pd-ssd
+  #     fstype: ext4
 
 # Persistent Volume Claims configuration
+# Pre-create PVCs for backup storage and scripts
 persistentVolumeClaims:
+  # -------------------------
   # Backup storage
+  # -------------------------
+  # Primary storage for database backups
+  # Size depends on: database size × retention period × compression ratio
   backup-storage:
     enabled: false
     accessModes:
-      - ReadWriteOnce
+      - ReadWriteOnce  # Single node access (typical for backups)
+      # Use ReadWriteMany if backups need to be accessed from multiple nodes
+    # Choose storage class based on performance requirements
+    # - standard: Cheaper, slower (HDD)
+    # - fast: More expensive, faster (SSD)
     storageClassName: standard
+    # Adjust size based on your database size and retention policy
+    # Rule of thumb: (DB size × retention days × 0.5 for compression) × 2 for safety
     storage: 50Gi
     annotations: {}
 
+  # -------------------------
   # Scripts and configuration storage
+  # -------------------------
+  # Optional: For mounting custom scripts
+  # Usually small unless you have many large scripts
   scripts-storage:
     enabled: false
     accessModes:
@@ -215,21 +366,39 @@ persistentVolumeClaims:
     storage: 1Gi
     annotations: {}
 
+# ============================================================================
+# CONFIGMAPS
+# ============================================================================
+# Store non-sensitive configuration files and scripts
 # ConfigMaps for custom scripts and configurations
 configMaps:
   # Database scripts
+  # Use this to store custom backup scripts, migration scripts, etc.
   database-scripts:
     enabled: false
     data: {}
-      # Example:
+      # Example PostgreSQL backup script:
       # postgresql-backup.sh: |
       #   #!/bin/bash
-      #   pg_dump -h $DB_HOST -U $DB_USER -d $DB_NAME > /backup/backup.sql
+      #   set -e
+      #   TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+      #   pg_dump -h $DB_HOST -U $DB_USER -d $DB_NAME > /backup/backup_${TIMESTAMP}.sql
+      #   # Cleanup old backups
+      #   find /backup -name "backup_*.sql" -mtime +7 -delete
+      #
+      # Example MySQL backup script:
       # mysql-backup.sh: |
       #   #!/bin/bash
-      #   mysqldump -h $DB_HOST -u $DB_USER -p$DB_PASSWORD $DB_NAME > /backup/backup.sql
+      #   set -e
+      #   TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+      #   mysqldump -h $DB_HOST -u $DB_USER -p$DB_PASSWORD $DB_NAME > /backup/backup_${TIMESTAMP}.sql
+      #   find /backup -name "backup_*.sql" -mtime +7 -delete
 
+# ============================================================================
+# CONTAINER IMAGES
+# ============================================================================
 # Default container images for different database operations
+# Override these versions as needed for your environment
 images:
   # PostgreSQL/TimescaleDB operations
   postgresql:
@@ -273,16 +442,28 @@ images:
     tag: "3.19"
     pullPolicy: IfNotPresent
 
+# ============================================================================
+# SCHEMA MANAGEMENT JOBS
+# ============================================================================
+# Configure one-time schema migration jobs
+# These jobs run during chart installation/upgrade to apply database changes
 # Schema management jobs
 schemaJobs:
-  # Enable/disable schema management
+  # Enable/disable all schema management jobs
   enabled: false
   
   # Default configuration for schema jobs
+  # These defaults apply to all database schema jobs unless overridden
   defaults:
+    # Restart policy for failed jobs
+    # OnFailure: Restart container on failure (recommended)
+    # Never: Don't restart on failure (useful for debugging)
     restartPolicy: OnFailure
+    # Automatically cleanup job after completion (5 minutes)
     ttlSecondsAfterFinished: 300
+    # Number of retries before marking job as failed
     backoffLimit: 3
+    # Resource limits for schema migration containers
     resources:
       limits:
         cpu: 500m
@@ -363,18 +544,33 @@ schemaJobs:
       - name: CHANGELOG_FILE
         value: "db/changelog/db.changelog-master.xml"
 
+# ============================================================================
+# BACKUP JOBS (CronJobs)
+# ============================================================================
+# Configure scheduled backup jobs for automated database backups
+# These CronJobs run on a schedule to create database backups
 # Backup jobs configuration
 backupJobs:
+  # Enable/disable all backup jobs
   enabled: false
   
   # Default configuration for backup jobs
+  # These defaults apply to all database backup jobs unless overridden
   defaults:
+    # Concurrency policy: Forbid prevents overlapping backup jobs
+    # Critical for backups to avoid corruption and resource conflicts
     concurrencyPolicy: Forbid
+    # Keep last 3 failed backup jobs for debugging
     failedJobsHistoryLimit: 3
+    # Keep last 3 successful backup jobs for audit trail
     successfulJobsHistoryLimit: 3
+    # Don't suspend backups by default
     suspend: false
+    # Retry failed backups 3 times
     backoffLimit: 3
+    # Keep completed backup jobs for 24 hours
     ttlSecondsAfterFinished: 86400
+    # Resource limits for backup containers
     resources:
       limits:
         cpu: 500m
@@ -461,18 +657,33 @@ backupJobs:
         persistentVolumeClaim:
           claimName: backup-storage
 
+# ============================================================================
+# MAINTENANCE JOBS (CronJobs)
+# ============================================================================
+# Configure scheduled maintenance jobs for database optimization
+# These CronJobs run on a schedule to perform routine maintenance tasks
 # Maintenance jobs configuration
 maintenanceJobs:
+  # Enable/disable all maintenance jobs
   enabled: false
   
   # Default configuration for maintenance jobs
+  # These defaults apply to all database maintenance jobs unless overridden
   defaults:
+    # Concurrency policy: Forbid prevents overlapping maintenance operations
     concurrencyPolicy: Forbid
+    # Keep last 3 failed maintenance jobs for debugging
     failedJobsHistoryLimit: 3
+    # Keep only last successful maintenance job (don't need history)
     successfulJobsHistoryLimit: 1
+    # Don't suspend maintenance by default
     suspend: false
+    # Retry failed maintenance 3 times
     backoffLimit: 3
+    # Keep completed maintenance jobs for 24 hours
     ttlSecondsAfterFinished: 86400
+    # Resource limits for maintenance containers
+    # Typically lower than backups as maintenance is less resource-intensive
     resources:
       limits:
         cpu: 200m

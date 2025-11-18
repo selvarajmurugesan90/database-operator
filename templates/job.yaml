@@ -1,9 +1,32 @@
+{{/*
+  JOB TEMPLATE
+  
+  This template creates Kubernetes Job resources for one-time database operations.
+  It iterates over all entries in .Values.jobs and creates a Job for each enabled entry.
+  
+  Use cases:
+  - Schema migrations (Liquibase, Flyway)
+  - Data imports/exports
+  - One-time maintenance tasks
+  - Database initialization
+  
+  Configuration: Define jobs in values.yaml under the 'jobs:' key
+*/}}
 {{- if .Values.jobs }}
+{{/* Iterate over all job definitions in values.yaml */}}
 {{- range $name, $job := .Values.jobs }}
+{{/* Only create Job if enabled: true */}}
 {{- if $job.enabled }}
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
+  {{/* 
+    Generate job name:
+    - If generateName is true: append image tag version (e.g., postgresql-schema-4-25)
+    - Otherwise: use simple name (e.g., postgresql-schema)
+    This allows multiple versions of the same job to coexist
+  */}}
   {{- if $job.generateName }}
   name: {{ include "database-operator.fullname" $ }}-{{ $name }}-{{ $job.image.tag | default "1.0.0" | replace "." "-" | trunc 63 | trimSuffix "-" }}
   {{- else }}
@@ -11,9 +34,11 @@ metadata:
   {{- end }}
   labels:
     {{- include "database-operator.labels" $ | nindent 4 }}
+    {{/* Add version label when using generateName for better tracking */}}
     {{- if $job.generateName }}
     app.kubernetes.io/version: {{ $job.image.tag | default "1.0.0" | quote }}
     {{- end }}
+  {{/* Support custom annotations (e.g., for monitoring, service mesh) */}}
   {{- with $job.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -21,6 +46,7 @@ metadata:
 spec:
   template:
     metadata:
+      {{/* Pod-level annotations (e.g., prometheus.io/scrape) */}}
       {{- with $job.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
@@ -31,6 +57,11 @@ spec:
         app.kubernetes.io/version: {{ $job.image.tag | default "1.0.0" | quote }}
         {{- end }}
     spec:
+      {{/* 
+        Image Pull Secrets Configuration
+        Supports both global and job-specific pull secrets
+        Job-specific secrets override global ones if both are defined
+      */}}
       {{- with $.Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -39,22 +70,51 @@ spec:
       imagePullSecrets:
         {{- toYaml $job.imagePullSecrets | nindent 8 }}
       {{- end }}
+      {{/*
+        Service Account Configuration
+        Complex logic to handle:
+        1. Global service account (serviceAccount.create: true)
+        2. Job-specific service account override (serviceAccount.enabled: true/false)
+        3. No service account (uses default)
+      */}}
       {{- if or (and (hasKey $.Values "serviceAccount") $.Values.serviceAccount.create (not (and (hasKey $job "serviceAccount") (hasKey $job.serviceAccount "enabled") (eq $job.serviceAccount.enabled false)))) (and (hasKey $job "serviceAccount") (hasKey $job.serviceAccount "enabled") (eq $job.serviceAccount.enabled true)) }}
       serviceAccountName: {{ include "database-operator.serviceAccountName" $ }}
       {{- end }}
+      {{/*
+        Pod Security Context
+        Applies pod-level security settings (user, group, fsGroup)
+        Can be disabled by setting securityContext.enabled: false
+        Uses omit to remove the 'enabled' field from the final YAML
+      */}}
       {{- if and $job.securityContext (not (eq $job.securityContext.enabled false)) }}
       securityContext:
         {{- omit $job.securityContext "enabled" | toYaml | nindent 8 }}
       {{- end }}
+      {{/* 
+        Restart Policy for Jobs
+        - OnFailure: Restart pod on failure (default, suitable for most cases)
+        - Never: Don't restart pod (useful for debugging or single-attempt operations)
+      */}}
       restartPolicy: {{ $job.restartPolicy | default "OnFailure" }}
       containers:
         - name: {{ $name }}
+          {{/*
+            Container Security Context
+            Applies container-level security settings (capabilities, privilege escalation)
+            Overrides pod-level settings if both are defined
+          */}}
           {{- if and $job.containerSecurityContext (not (eq $job.containerSecurityContext.enabled false)) }}
           securityContext:
             {{- omit $job.containerSecurityContext "enabled" | toYaml | nindent 12 }}
           {{- end }}
+          {{/* Container image specification */}}
           image: "{{ $job.image.repository }}:{{ $job.image.tag | default "1.0.0" }}"
           imagePullPolicy: {{ $job.image.pullPolicy | default "IfNotPresent" }}
+          {{/* 
+            Command and Args
+            - command: Overrides container ENTRYPOINT
+            - args: Overrides container CMD or appends to ENTRYPOINT
+          */}}
           {{- if $job.command }}
           command:
             {{- toYaml $job.command | nindent 12 }}
@@ -63,10 +123,16 @@ spec:
           args:
             {{- toYaml $job.args | nindent 12 }}
           {{- end }}
+          {{/* Resource requests and limits for CPU and memory */}}
           {{- with $job.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{/*
+            Environment Variables
+            - envFrom: Load all variables from Secret or ConfigMap
+            - env: Define individual environment variables
+          */}}
           {{- with $job.envFrom }}
           envFrom:
             {{- toYaml . | nindent 12 }}
@@ -75,31 +141,40 @@ spec:
           env:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{/* Volume mounts for accessing files (scripts, data, backups) */}}
           {{- with $job.volumeMounts }}
           volumeMounts:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{/* Volume definitions (PVCs, ConfigMaps, Secrets) */}}
       {{- with $job.volumes }}
       volumes:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{/* Node selection for pod scheduling */}}
       {{- with $job.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{/* Advanced pod affinity/anti-affinity rules */}}
       {{- with $job.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{/* Tolerations for node taints */}}
       {{- with $job.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+  {{/*
+    Retry Configuration
+    - backoffLimit: Number of retries before marking job as failed (default: 3)
+    - ttlSecondsAfterFinished: Automatic cleanup after completion (optional)
+  */}}
   backoffLimit: {{ $job.backoffLimit | default 3 }}
   {{- if $job.ttlSecondsAfterFinished }}
   ttlSecondsAfterFinished: {{ $job.ttlSecondsAfterFinished }}
   {{- end }}
----
 {{- end }}
 {{- end }}
 {{- end }}
