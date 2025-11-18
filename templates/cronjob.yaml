@@ -47,13 +47,13 @@ spec:
   {{/*
     SCHEDULING CONFIGURATION
     
-    schedule: Cron expression (e.g., "0 2 * * *" for daily at 2 AM)
+    schedule: Cron expression for when to run the job
     Format: minute hour day-of-month month day-of-week
     Examples:
-      "0 2 * * *"      - Every day at 2:00 AM
-      "*/15 * * * *"   - Every 15 minutes
-      "0 0 * * 0"      - Every Sunday at midnight
-      "0 3 1 * *"      - First day of every month at 3 AM
+      Daily at 2 AM: "0 2 * * *"
+      Every 15 minutes: Use asterisk-slash-15 for minute field
+      Weekly on Sunday: "0 0 * * 0"
+      Monthly on 1st: "0 3 1 * *"
   */}}
   schedule: {{ $cronJob.schedule | quote }}
   {{/*
